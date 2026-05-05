@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloudflare Tunnel for WhatsApp MCP Server
+After=network-online.target whatsapp-mcp-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:8081
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloudflared-mcp
+
+[Install]
+WantedBy=multi-user.target
