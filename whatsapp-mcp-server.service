@@ -6,7 +6,7 @@ Wants=whatsapp-bridge.service
 [Service]
 Type=simple
 User=admin
-WorkingDirectory=/home/admin/whatsapp-mcp-ankit/whatsapp-mcp-server
+WorkingDirectory=/home/admin/Whatsapp-mcp/whatsapp-mcp-server
 ExecStart=/home/admin/.local/bin/uv run python main.py
 Restart=on-failure
 RestartSec=5
