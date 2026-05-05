@@ -1,0 +1,18 @@
+[Unit]
+Description=WhatsApp MCP Server (Python)
+After=network.target whatsapp-bridge.service
+Wants=whatsapp-bridge.service
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin/whatsapp-mcp-ankit/whatsapp-mcp-server
+ExecStart=/home/admin/.local/bin/uv run python main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-mcp-server
+
+[Install]
+WantedBy=multi-user.target
