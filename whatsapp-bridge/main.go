@@ -641,7 +641,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
@@ -800,14 +800,14 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -859,21 +859,90 @@ func main() {
 	// Connect to WhatsApp
 	if client.Store.ID == nil {
 		// No ID stored, this is a new client, need to pair with phone
-		qrChan, _ := client.GetQRChannel(context.Background())
+		fmt.Println("Starting WhatsApp authentication...")
+		fmt.Println("Initializing QR code generation...")
+		
+		// Get QR channel before connecting (this is the correct order)
+		qrChan, err := client.GetQRChannel(context.Background())
+		if err != nil {
+			logger.Errorf("Failed to get QR channel: %v", err)
+			fmt.Println("\nERROR: Failed to initialize QR channel")
+			fmt.Printf("Error details: %v\n", err)
+			return
+		}
+		
+		fmt.Println("QR channel initialized successfully")
+		fmt.Println("Connecting to WhatsApp servers...")
+		
+		// Now connect
 		err = client.Connect()
 		if err != nil {
 			logger.Errorf("Failed to connect: %v", err)
+			fmt.Println("\nERROR: Failed to connect to WhatsApp")
+			fmt.Printf("Error details: %v\n", err)
 			return
 		}
+		
+		fmt.Println("Connected! Waiting for QR code...")
 
 		// Print QR code for pairing with phone
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-			} else if evt.Event == "success" {
-				connected <- true
-				break
+		qrReceived := false
+		qrTimeout := time.After(60 * time.Second)
+		
+		for {
+			select {
+			case evt := <-qrChan:
+				fmt.Printf("DEBUG: QR Event received - Type: %s\n", evt.Event)
+				
+				if evt.Event == "code" {
+					qrReceived = true
+					fmt.Println("\n╔═══════════════════════════════════════╗")
+					fmt.Println("║   Scan this QR code with WhatsApp:   ║")
+					fmt.Println("╚═══════════════════════════════════════╝")
+					
+					// Display QR code
+					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+					
+					// Save to file as backup
+					qrFile, err := os.Create("qr_code.txt")
+					if err == nil {
+						qrFile.WriteString(evt.Code)
+						qrFile.Close()
+						fmt.Println("\n✓ QR code saved to qr_code.txt")
+						fmt.Println("If the QR code doesn't display properly:")
+						fmt.Println("  • Use the text from qr_code.txt")
+						fmt.Println("  • Generate QR at: https://www.qr-code-generator.com/")
+					}
+				} else if evt.Event == "success" {
+					fmt.Println("\n✓ QR scan successful! Completing authentication...")
+					connected <- true
+					break
+				} else if evt.Event == "timeout" {
+					if !qrReceived {
+						fmt.Println("\nERROR: QR code generation timed out")
+						fmt.Println("This might be due to:")
+						fmt.Println("  1. Rate limiting (too many attempts)")
+						fmt.Println("  2. Network issues")
+						fmt.Println("  3. WhatsApp server issues")
+						fmt.Println("\nPlease wait 5 minutes and try again.")
+						client.Disconnect()
+						return
+					} else {
+						fmt.Println("\nQR code expired. Waiting for new code...")
+					}
+				}
+				
+			case <-qrTimeout:
+				if !qrReceived {
+					fmt.Println("\nERROR: No QR code received within 60 seconds")
+					fmt.Println("Troubleshooting steps:")
+					fmt.Println("  1. Check your internet connection")
+					fmt.Println("  2. Make sure web.whatsapp.com works in your browser")
+					fmt.Println("  3. Disable VPN/proxy if using one")
+					fmt.Println("  4. Update whatsmeow: go get -u go.mau.fi/whatsmeow@latest")
+					client.Disconnect()
+					return
+				}
 			}
 		}
 
@@ -887,11 +956,18 @@ func main() {
 		}
 	} else {
 		// Already logged in, just connect
+		fmt.Println("Existing session found. Reconnecting...")
+		
 		err = client.Connect()
 		if err != nil {
-			logger.Errorf("Failed to connect: %v", err)
+			logger.Errorf("Failed to connect with existing session: %v", err)
+			fmt.Println("\nERROR: Failed to reconnect")
+			fmt.Println("The session might be expired. To start fresh:")
+			fmt.Println("  rm -rf store/*.db")
+			fmt.Println("  go run main.go")
 			return
 		}
+		fmt.Println("✓ Successfully reconnected!")
 		connected <- true
 	}
 
@@ -973,7 +1049,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -988,7 +1064,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {
